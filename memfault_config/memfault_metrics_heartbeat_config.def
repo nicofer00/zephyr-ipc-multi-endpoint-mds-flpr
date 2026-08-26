@@ -1,0 +1,10 @@
+/* Application-specific metrics can be defined here.
+ * Please refer to https://docs.memfault.com/docs/embedded/metrics-api for more details.
+ */
+
+MEMFAULT_METRICS_KEY_DEFINE(button_press_count, kMemfaultMetricType_Unsigned)
+MEMFAULT_METRICS_KEY_DEFINE(button_elapsed_time_ms, kMemfaultMetricType_Timer)
+MEMFAULT_METRICS_KEY_DEFINE(battery_soc_pct, kMemfaultMetricType_Unsigned)
+MEMFAULT_METRICS_KEY_DEFINE(flpr_uptime_ms, kMemfaultMetricType_Unsigned)
+MEMFAULT_METRICS_KEY_DEFINE(flpr_heartbeat, kMemfaultMetricType_Unsigned)
+MEMFAULT_METRICS_KEY_DEFINE(flpr_free_stack, kMemfaultMetricType_Unsigned)

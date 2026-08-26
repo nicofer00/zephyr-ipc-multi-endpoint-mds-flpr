@@ -1,0 +1,6 @@
+﻿# Build and debug artifacts
+build/
+debug-*.log
+.cursor/
+*.pyc
+__pycache__/
