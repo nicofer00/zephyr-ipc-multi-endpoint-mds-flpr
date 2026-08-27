@@ -9,38 +9,50 @@ Standalone copy of Zephyr `samples/subsys/ipc/ipc_service/multi_endpoint`, with:
 - **MCUboot + BLE MCUmgr OTA** (primary + secondary slots on **internal RRAM**)
 - **SPI00 MX25R64 shell CLI** (bring-up / speed tests; not used as DFU secondary)
 
+## Important: this repo is not a west workspace
+
+Do **not** run bare `west` here, and do **not** `west init` / `west update` inside
+this clone (that would pull NCS into the project).
+
+Build commands use `just`, which runs `west` inside your **existing shared NCS
+install** (from nrfutil’s install directory, typically with a `.west` next to
+`toolchains/`). Only build artifacts land under `./build` in this repo.
+
 ## Prerequisites
 
 - [just](https://github.com/casey/just)
 - Python 3 on `PATH` (`python` on Windows, `python3` on Unix)
-- `nrfutil` with **toolchain-manager** and NCS **v3.4.0** installed
-- nRF54LM20 DK (set `JLINK_SN` if needed)
-- For SPI CLI: DK **board controller** must route flash GPIOs (P2.00–P2.05) to the SoC
+- `nrfutil` + **toolchain-manager**
+- A full NCS SDK **once**, shared (outside this repo), matching the toolchain
+  version (default **v3.4.0**). If `just setup` says sources are missing:
 
-No freestanding `west.yml` workspace is required. The justfile resolves the NCS
-west root from `nrfutil toolchain-manager list --json` (parent of `toolchains/`).
+  ```text
+  nrfutil sdk-manager install v3.4.0
+  ```
 
-## Build / flash / DFU
+  or install SDK v3.4.0 via nRF Connect for Desktop → Toolchain Manager.
+
+- nRF54LM20 DK (override with `JLINK_SN` if needed)
+- For SPI CLI: DK board controller must route flash GPIOs (P2.00–P2.05) to the SoC
+
+## Commands
 
 From this project directory:
 
 ```text
-just build                          # pristine sysbuild, NCS v3.4.0
-just build v3.4.0                   # same, explicit toolchain version arg
-just flash                          # west flash --dev-id $JLINK_SN
-just dfu                            # scripts/make_app_update.py → build/dfu/
-just ncs-root                       # print west root from nrfutil JSON
+just setup              # verify shared NCS west root (no download into repo)
+just build              # pristine sysbuild, NCS v3.4.0
+just build v3.4.0       # explicit toolchain/SDK version
+just flash
+just dfu                # → build/dfu/app_update.bin
+just west list          # any west command in the shared workspace
+just ncs-root           # print shared west topdir
 just --list
 ```
 
-Optional env overrides:
+Optional env overrides: `BOARD`, `JLINK_SN`.
 
-```text
-BOARD=nrf54lm20dk/nrf54lm20b/cpuapp
-JLINK_SN=1051800018
-```
-
-Snippet CMake flag is derived from the directory name (`multi_endpoint` vs
+Snippet CMake flag follows the directory name (`multi_endpoint` vs
 `zephyr-ipc-multi-endpoint-mds-flpr`).
 
 ## Ports (typical on LM20 DK)
@@ -54,18 +66,14 @@ Snippet CMake flag is derived from the directory name (`multi_endpoint` vs
 
 ## SPI00 flash CLI
 
-DTS keeps **`spi-max-frequency = 8 MHz`**. The shell keeps a RAM `spi_config`
-so you can raise the **CLI** clock up to **32 MHz** (SPIM00 high-speed limit on P2):
+DTS keeps **`spi-max-frequency = 8 MHz`**. Raise CLI speed up to **32 MHz**:
 
 ```text
 spiflash info
-spiflash speed
 spiflash speed 32000000
 spiflash id
 spiflash test
 ```
-
-CLI erase/write/read use offset `0xff000` on the MX25.
 
 ## Local BLE OTA (smpmgr)
 
@@ -73,24 +81,16 @@ After `just dfu`:
 
 ```text
 smpmgr --transport ble --address <bd_addr> image upload build/dfu/app_update.bin
-smpmgr --transport ble --address <bd_addr> image list
-smpmgr --transport ble --address <bd_addr> image test <hash>
-smpmgr --transport ble --address <bd_addr> reset
 ```
 
-With `nordic-flpr`, FLPR RRAM sits outside the MCUboot slots, so OTA updates the
-**app** image; reflash the remote image when FLPR changes.
+With `nordic-flpr`, FLPR RRAM sits outside MCUboot slots; OTA updates the **app**
+image. Reflash remote when FLPR changes.
 
-## Cloud / Device Manager path
+## Cloud / Device Manager
 
-1. Align firmware version with Memfault / nRF Cloud release (`1.0.0+0` here;
-   bump both Kconfig version symbols together).
-2. Upload signed `app_update.bin` as a release for this hardware/software type.
-3. Phone: **nRF Connect Device Manager** → check for updates → SMP upload.
-4. MDS carries diagnostics/version into the fleet UI; MDS alone does **not**
-   transfer the firmware blob.
-
-Project key is set in `prj.conf` as `CONFIG_MEMFAULT_NCS_PROJECT_KEY`.
+Align `CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION` / `CONFIG_MEMFAULT_NCS_FW_VERSION`,
+upload `app_update.bin`, use nRF Connect Device Manager over BLE SMP. MDS does
+not carry the firmware blob. Project key: `CONFIG_MEMFAULT_NCS_PROJECT_KEY`.
 
 ## Upstream
 

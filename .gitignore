@@ -4,3 +4,8 @@ debug-*.log
 .cursor/
 *.pyc
 __pycache__/
+
+# never create a local west workspace here
+.west/
+build/
+
