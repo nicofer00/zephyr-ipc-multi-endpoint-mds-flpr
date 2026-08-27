@@ -303,7 +303,13 @@ int main(void)
 		}
 	}
 
+	/* #region agent log */
+	printk("IPC[A] calling flpr_ipc_init @ %u ms\n", k_uptime_get_32());
+	/* #endregion */
 	err = flpr_ipc_init();
+	/* #region agent log */
+	printk("IPC[A] flpr_ipc_init returned %d @ %u ms\n", err, k_uptime_get_32());
+	/* #endregion */
 	if (err) {
 		printk("FLPR IPC init failed (err %d), continuing without FLPR\n", err);
 	}

@@ -47,6 +47,9 @@ static void ept_log_bound(void *priv)
 	ARG_UNUSED(priv);
 	log_bound = true;
 	k_sem_give(&log_bound_sem);
+	/* #region agent log */
+	printk("IPC[A] BOUND flpr_log @ %u ms\n", k_uptime_get_32());
+	/* #endregion */
 	printk("FLPR IPC: flpr_log bound\n");
 }
 
@@ -55,6 +58,9 @@ static void ept_ctrl_bound(void *priv)
 	ARG_UNUSED(priv);
 	ctrl_bound = true;
 	k_sem_give(&ctrl_bound_sem);
+	/* #region agent log */
+	printk("IPC[A] BOUND flpr_ctrl @ %u ms\n", k_uptime_get_32());
+	/* #endregion */
 	printk("FLPR IPC: flpr_ctrl bound\n");
 }
 
@@ -183,10 +189,15 @@ static int send_ctrl(uint8_t opcode, uint8_t seq, const void *payload, uint16_t 
 int flpr_ipc_init(void)
 {
 	int ret;
+	uint32_t t0;
 
 #if DT_NODE_EXISTS(DT_NODELABEL(cdc_acm_uart1))
 	cdc1_dev = DEVICE_DT_GET(DT_NODELABEL(cdc_acm_uart1));
 #endif
+
+	/* #region agent log */
+	printk("IPC[A] init enter @ %u ms\n", k_uptime_get_32());
+	/* #endregion */
 
 	ipc0_dev = DEVICE_DT_GET(DT_NODELABEL(ipc0));
 	if (!device_is_ready(ipc0_dev)) {
@@ -194,29 +205,69 @@ int flpr_ipc_init(void)
 		return -ENODEV;
 	}
 
+	/* #region agent log */
+	printk("IPC[A] open_instance enter @ %u ms\n", k_uptime_get_32());
+	/* #endregion */
 	ret = ipc_service_open_instance(ipc0_dev);
+	/* #region agent log */
+	printk("IPC[A] open_instance ret=%d @ %u ms\n", ret, k_uptime_get_32());
+	/* #endregion */
 	if (ret < 0 && ret != -EALREADY) {
 		printk("FLPR IPC: open failed (%d)\n", ret);
 		return ret;
 	}
 
+	t0 = k_uptime_get_32();
+	/* #region agent log */
+	printk("IPC[A] register flpr_log enter @ %u ms\n", t0);
+	/* #endregion */
 	ret = ipc_service_register_endpoint(ipc0_dev, &ept_log, &ept_log_cfg);
+	/* #region agent log */
+	printk("IPC[A] register flpr_log ret=%d dt=%u ms\n", ret, k_uptime_get_32() - t0);
+	/* #endregion */
 	if (ret < 0) {
 		printk("FLPR IPC: register flpr_log failed (%d)\n", ret);
 		return ret;
 	}
 
+	t0 = k_uptime_get_32();
+	/* #region agent log */
+	printk("IPC[A] register flpr_ctrl enter @ %u ms\n", t0);
+	/* #endregion */
 	ret = ipc_service_register_endpoint(ipc0_dev, &ept_ctrl, &ept_ctrl_cfg);
+	/* #region agent log */
+	printk("IPC[A] register flpr_ctrl ret=%d dt=%u ms\n", ret, k_uptime_get_32() - t0);
+	/* #endregion */
 	if (ret < 0) {
 		printk("FLPR IPC: register flpr_ctrl failed (%d)\n", ret);
 		return ret;
 	}
 
 	/* Do not block forever; FLPR may bind slightly later. */
-	(void)k_sem_take(&log_bound_sem, K_MSEC(3000));
-	(void)k_sem_take(&ctrl_bound_sem, K_MSEC(3000));
+	/* #region agent log */
+	printk("IPC[A] sem log wait enter @ %u ms\n", k_uptime_get_32());
+	/* #endregion */
+	ret = k_sem_take(&log_bound_sem, K_MSEC(3000));
+	/* #region agent log */
+	printk("IPC[A] sem log ret=%d bound=%d @ %u ms\n", ret, log_bound, k_uptime_get_32());
+	/* #endregion */
+
+	/* #region agent log */
+	printk("IPC[A] sem ctrl wait enter @ %u ms\n", k_uptime_get_32());
+	/* #endregion */
+	ret = k_sem_take(&ctrl_bound_sem, K_MSEC(3000));
+	/* #region agent log */
+	printk("IPC[A] sem ctrl ret=%d bound=%d @ %u ms\n", ret, ctrl_bound, k_uptime_get_32());
+	/* #endregion */
 
 	printk("FLPR IPC: init done (log_bound=%d ctrl_bound=%d)\n", log_bound, ctrl_bound);
+
+	/* #region agent log */
+	k_sleep(K_SECONDS(5));
+	printk("IPC[A] late status log=%d ctrl=%d @ %u ms\n", log_bound, ctrl_bound,
+	       k_uptime_get_32());
+	/* #endregion */
+
 	return 0;
 }
 
