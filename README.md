@@ -11,46 +11,37 @@ Standalone copy of Zephyr `samples/subsys/ipc/ipc_service/multi_endpoint`, with:
 
 ## Prerequisites
 
-- nRF Connect SDK **v3.4.0** installed (set `NCS_ROOT`, e.g. `$HOME/ncs` or `%USERPROFILE%\ncs`)
-- `nrfutil toolchain-manager` with that NCS version
-- nRF54LM20 DK; J-Link serial (example: `1051800018`)
+- [just](https://github.com/casey/just)
+- Python 3 on `PATH` (`python` on Windows, `python3` on Unix)
+- `nrfutil` with **toolchain-manager** and NCS **v3.4.0** installed
+- nRF54LM20 DK (set `JLINK_SN` if needed)
 - For SPI CLI: DK **board controller** must route flash GPIOs (P2.00–P2.05) to the SoC
 
-No freestanding `west.yml` workspace is required — build against your existing NCS tree.
+No freestanding `west.yml` workspace is required. The justfile resolves the NCS
+west root from `nrfutil toolchain-manager list --json` (parent of `toolchains/`).
 
-## Environment
+## Build / flash / DFU
 
-PowerShell example (adjust paths to your clone / NCS install):
+From this project directory:
 
-```powershell
-$env:NCS_ROOT = Join-Path $HOME "ncs"
-$env:APP_DIR  = Join-Path $HOME "dev\sandbox\zephyr-ipc-multi-endpoint-mds-flpr"
-$env:BUILD_DIR = Join-Path $env:APP_DIR "build"
-$env:JLINK_SN = "1051800018"
+```text
+just build                          # pristine sysbuild, NCS v3.4.0
+just build v3.4.0                   # same, explicit toolchain version arg
+just flash                          # west flash --dev-id $JLINK_SN
+just dfu                            # scripts/make_app_update.py → build/dfu/
+just ncs-root                       # print west root from nrfutil JSON
+just --list
 ```
 
-Bash / Git Bash:
+Optional env overrides:
 
-```bash
-export NCS_ROOT="${HOME}/ncs"
-export APP_DIR="${HOME}/dev/sandbox/zephyr-ipc-multi-endpoint-mds-flpr"
-export BUILD_DIR="${APP_DIR}/build"
-export JLINK_SN="1051800018"
+```text
+BOARD=nrf54lm20dk/nrf54lm20b/cpuapp
+JLINK_SN=1051800018
 ```
 
-If this tree lives under Zephyr samples as `multi_endpoint`, point `APP_DIR` there and use
-`-Dmulti_endpoint_SNIPPET=nordic-flpr` instead of the long snippet name below.
-
-## Build / flash (nrfutil)
-
-```powershell
-nrfutil toolchain-manager launch --ncs-version=v3.4.0 --chdir $env:NCS_ROOT -- `
-  west build -p -b nrf54lm20dk/nrf54lm20b/cpuapp -d $env:BUILD_DIR $env:APP_DIR --sysbuild `
-  -- -Dzephyr-ipc-multi-endpoint-mds-flpr_SNIPPET=nordic-flpr
-
-nrfutil toolchain-manager launch --ncs-version=v3.4.0 --chdir $env:NCS_ROOT -- `
-  west flash -d $env:BUILD_DIR --dev-id $env:JLINK_SN
-```
+Snippet CMake flag is derived from the directory name (`multi_endpoint` vs
+`zephyr-ipc-multi-endpoint-mds-flpr`).
 
 ## Ports (typical on LM20 DK)
 
@@ -74,34 +65,21 @@ spiflash id
 spiflash test
 ```
 
-CLI erase/write/read use offset `0xff000` on the MX25. Rates above 8 MHz may
-need high-drive GPIOs; validate with `spiflash id` / `spiflash test`.
-
-## Make a single app+FLPR OTA image
-
-After a successful sysbuild:
-
-```powershell
-nrfutil toolchain-manager launch --ncs-version=v3.4.0 --chdir $env:NCS_ROOT -- `
-  python (Join-Path $env:APP_DIR "scripts\make_app_update.py") --build-dir $env:BUILD_DIR
-```
-
-Produces `$BUILD_DIR/dfu/app_update.bin` (cpuapp MCUboot image for BLE OTA) and
-`app_and_flpr_merged.hex`. With `nordic-flpr`, FLPR RRAM sits outside the
-MCUboot slots, so OTA updates the **app** image; reflash the remote image when
-FLPR changes. Slot size for optional re-sign is `0xE6000` (920 KiB).
+CLI erase/write/read use offset `0xff000` on the MX25.
 
 ## Local BLE OTA (smpmgr)
 
+After `just dfu`:
+
 ```text
-smpmgr --transport ble --address <bd_addr> image upload $BUILD_DIR/dfu/app_update.bin
+smpmgr --transport ble --address <bd_addr> image upload build/dfu/app_update.bin
 smpmgr --transport ble --address <bd_addr> image list
 smpmgr --transport ble --address <bd_addr> image test <hash>
 smpmgr --transport ble --address <bd_addr> reset
 ```
 
-(Exact confirm/test commands depend on your `smpmgr` version; Device Manager UI
-can also upload the same `app_update.bin` over BLE SMP.)
+With `nordic-flpr`, FLPR RRAM sits outside the MCUboot slots, so OTA updates the
+**app** image; reflash the remote image when FLPR changes.
 
 ## Cloud / Device Manager path
 
@@ -113,15 +91,6 @@ can also upload the same `app_update.bin` over BLE SMP.)
    transfer the firmware blob.
 
 Project key is set in `prj.conf` as `CONFIG_MEMFAULT_NCS_PROJECT_KEY`.
-
-## just-style command notes (optional)
-
-```text
-just build   # nrfutil … west build … -D…_SNIPPET=nordic-flpr
-just flash   # west flash --dev-id $JLINK_SN
-just dfu     # python scripts/make_app_update.py --build-dir $BUILD_DIR
-just ota     # smpmgr image upload $BUILD_DIR/dfu/app_update.bin
-```
 
 ## Upstream
 
