@@ -7,7 +7,7 @@
 		 * CDC_ACM_SERIAL_MULTIPLE_INSTANCES only registers UARTs named by
 		 * these chosen nodes (console / shell-uart / uart-mcumgr). Pointing
 		 * uart-mcumgr at cdc_acm_uart1 registers the second CDC without
-		 * enabling MCUmgr unless CONFIG_MCUMGR is also set.
+		 * enabling UART SMP transport (BLE SMP is used for OTA).
 		 */
 		zephyr,console = &uart20;
 		zephyr,shell-uart = &cdc_acm_uart0;
@@ -64,4 +64,10 @@
 		compatible = "zephyr,cdc-acm-uart";
 		label = "CDC_ACM_1";
 	};
+};
+
+/* SPI00 MX25R64 for shell CLI only — OTA secondary stays on internal RRAM. */
+&mx25r64 {
+	status = "okay";
+	spi-max-frequency = <8000000>;
 };

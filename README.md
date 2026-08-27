@@ -1,37 +1,115 @@
-﻿# Zephyr IPC multi_endpoint — MDS + FLPR (nRF54LM20B)
+﻿# Zephyr IPC multi_endpoint — MDS + FLPR + OTA + SPI flash (nRF54LM20B)
 
-Standalone copy of the Zephyr sample
-`samples/subsys/ipc/ipc_service/multi_endpoint`, evolved for:
+Standalone copy of Zephyr `samples/subsys/ipc/ipc_service/multi_endpoint`, with:
 
 - Bluetooth Memfault Diagnostic Service (MDS) on cpuapp
 - FLPR `icmsg_me` endpoints `flpr_log` / `flpr_ctrl`
-- Dual USB CDC on the nRF54LM20 DK (shell on CDC0, FLPR logs on CDC1)
-- Settings over ZMS for bonding/CCC persistence
+- Dual USB CDC (shell on CDC0, FLPR logs on CDC1)
+- Settings over ZMS
+- **MCUboot + BLE MCUmgr OTA** (primary + secondary slots on **internal RRAM**)
+- **SPI00 MX25R64 shell CLI** (bring-up / speed tests; not used as DFU secondary)
 
-## Build (inside an NCS v3.4.0 west workspace)
+## Prerequisites
 
-Place or symlink this tree under your Zephyr `samples/...` path, or set it as
-the application directory:
+- nRF Connect SDK **v3.4.0** installed (e.g. `C:\ncs`)
+- `nrfutil toolchain-manager` with that NCS version
+- nRF54LM20 DK; J-Link serial (example: `1051800018`)
+- For SPI CLI: DK **board controller** must route flash GPIOs (P2.00–P2.05) to the SoC
 
-```bash
-west build -p -b nrf54lm20dk/nrf54lm20b/cpuapp --sysbuild \
-  path/to/zephyr-ipc-multi-endpoint-mds-flpr \
-  -- -Dmulti_endpoint_SNIPPET=nordic-flpr
+No freestanding `west.yml` workspace is required — build against your existing NCS tree.
+
+## Build / flash (nrfutil)
+
+From any directory (PowerShell):
+
+```powershell
+$APP = "C:\Users\momom\dev\sandbox\zephyr-ipc-multi-endpoint-mds-flpr"
+$BUILD = "$APP\build"
+
+nrfutil toolchain-manager launch --ncs-version=v3.4.0 --chdir C:\ncs -- `
+  west build -p -b nrf54lm20dk/nrf54lm20b/cpuapp -d $BUILD $APP --sysbuild `
+  -- -Dzephyr-ipc-multi-endpoint-mds-flpr_SNIPPET=nordic-flpr
+
+nrfutil toolchain-manager launch --ncs-version=v3.4.0 --chdir C:\ncs -- `
+  west flash -d $BUILD --dev-id 1051800018
 ```
 
-Sysbuild image name follows the app directory name; if the folder is not
-`multi_endpoint`, pass the matching snippet flag, e.g.
-`-Dzephyr-ipc-multi-endpoint-mds-flpr_SNIPPET=nordic-flpr`.
+If you symlink/copy this tree to
+`zephyr/samples/subsys/ipc/ipc_service/multi_endpoint`, use
+`-Dmulti_endpoint_SNIPPET=nordic-flpr` instead.
 
-Flash:
+## Ports (typical on LM20 DK)
 
-```bash
-west flash --dev-id <jlink-serial>
+| Port | Role |
+|------|------|
+| Debugger uart20 | App `printk` / LOG |
+| Debugger uart30 | FLPR local `printk` |
+| USB CDC0 | Shell (`flpr`, `spiflash`, `memfault`, …) |
+| USB CDC1 | Forwarded FLPR logs |
+
+## SPI00 flash CLI
+
+DTS keeps **`spi-max-frequency = 8 MHz`**. The shell keeps a RAM `spi_config`
+so you can raise the **CLI** clock up to **32 MHz** (SPIM00 high-speed limit on P2):
+
+```text
+spiflash info
+spiflash speed
+spiflash speed 32000000
+spiflash id
+spiflash test
 ```
 
-See `README.rst` for ports and shell commands.
+CLI erase/write/read use offset `0xff000` on the MX25. Rates above 8 MHz may
+need high-drive GPIOs; validate with `spiflash id` / `spiflash test`.
 
-Upstream reference: [zephyr/samples/subsys/ipc/ipc_service/multi_endpoint](https://github.com/nrfconnect/sdk-zephyr/tree/main/samples/subsys/ipc/ipc_service/multi_endpoint)
+## Make a single app+FLPR OTA image
 
-For a freestanding Iconic/west workspace app, see also
-https://github.com/nicofer00/nrf54lm20-mds-flpr
+After a successful sysbuild:
+
+```powershell
+nrfutil toolchain-manager launch --ncs-version=v3.4.0 --chdir C:\ncs -- `
+  python $APP\scripts\make_app_update.py --build-dir $BUILD
+```
+
+Produces `$BUILD\dfu\app_update.bin` (cpuapp MCUboot image for BLE OTA) and
+`app_and_flpr_merged.hex`. With `nordic-flpr`, FLPR RRAM sits outside the
+MCUboot slots, so OTA updates the **app** image; reflash the remote image when
+FLPR changes. Slot size for optional re-sign is `0xE6000` (920 KiB).
+
+## Local BLE OTA (smpmgr)
+
+```text
+smpmgr --transport ble --address <bd_addr> image upload <path>\app_update.bin
+smpmgr --transport ble --address <bd_addr> image list
+smpmgr --transport ble --address <bd_addr> image test <hash>
+smpmgr --transport ble --address <bd_addr> reset
+```
+
+(Exact confirm/test commands depend on your `smpmgr` version; Device Manager UI
+can also upload the same `app_update.bin` over BLE SMP.)
+
+## Cloud / Device Manager path
+
+1. Align firmware version with Memfault / nRF Cloud release (`1.0.0+0` here;
+   bump both Kconfig version symbols together).
+2. Upload signed `app_update.bin` as a release for this hardware/software type.
+3. Phone: **nRF Connect Device Manager** → check for updates → SMP upload.
+4. MDS carries diagnostics/version into the fleet UI; MDS alone does **not**
+   transfer the firmware blob.
+
+Project key is set in `prj.conf` as `CONFIG_MEMFAULT_NCS_PROJECT_KEY`.
+
+## just-style command notes (optional)
+
+```text
+just build   # nrfutil … west build … -D…_SNIPPET=nordic-flpr
+just flash   # west flash --dev-id …
+just dfu     # python scripts/make_app_update.py --build-dir build
+just ota     # smpmgr image upload build/dfu/app_update.bin
+```
+
+## Upstream
+
+- In-tree reference: `zephyr/samples/subsys/ipc/ipc_service/multi_endpoint`
+- Freestanding Iconic app: https://github.com/nicofer00/nrf54lm20-mds-flpr
