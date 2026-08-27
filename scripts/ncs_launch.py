@@ -52,14 +52,12 @@ def _find_west_root(start: Path) -> Path | None:
     for parent in candidates:
         if (parent / ".west").is_dir() and (parent / "zephyr").is_dir():
             return parent
-        # Versioned SDK layout: <install>/<version>/{.west,zephyr}
         versioned = [
             p
             for p in parent.glob("v*")
             if p.is_dir() and (p / ".west").is_dir() and (p / "zephyr").is_dir()
         ]
         if versioned:
-            # Prefer exact name match later; otherwise highest sort
             return sorted(versioned, key=lambda p: p.name)[-1]
     return None
 
@@ -71,7 +69,6 @@ def ncs_root_for(version: str) -> Path:
         hint = _install_dir_hint()
         if hint is not None:
             root = _find_west_root(hint)
-            # Prefer <install>/<version> if present
             versioned = hint / version
             if (versioned / ".west").is_dir() and (versioned / "zephyr").is_dir():
                 root = versioned
@@ -91,6 +88,13 @@ def ncs_root_for(version: str) -> Path:
             f"Then re-run: just setup {version}"
         )
     return root
+
+
+def _normalize_arg(arg: str) -> str:
+    """nrfutil on Windows drops backslashes in forwarded argv; use POSIX paths."""
+    if "\\" not in arg:
+        return arg
+    return arg.replace("\\", "/")
 
 
 def doctor(version: str) -> int:
@@ -124,6 +128,7 @@ def main() -> int:
         return doctor(version)
 
     root = ncs_root_for(version)
+    cmd = [_normalize_arg(a) for a in sys.argv[2:]]
     argv = [
         "nrfutil",
         "toolchain-manager",
@@ -131,7 +136,7 @@ def main() -> int:
         f"--ncs-version={version}",
         f"--chdir={root.as_posix()}",
         "--",
-        *sys.argv[2:],
+        *cmd,
     ]
     print("+", " ".join(argv), flush=True)
     return subprocess.call(argv)
