@@ -256,6 +256,7 @@ int main(void)
 	int err;
 
 	printk("Starting Bluetooth Memfault sample with FLPR IPC\n");
+	printk("APP version: %s\n", CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION);
 
 	err = dk_leds_init();
 	if (err) {
@@ -278,28 +279,27 @@ int main(void)
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return 0;
-	}
-
-	err = bt_conn_auth_cb_register(&conn_auth_callbacks);
-	if (err) {
-		printk("Failed to register authorization callbacks (err %d)\n", err);
-		return 0;
-	}
-
-	err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
-	if (err) {
-		printk("Failed to register authorization info callbacks (err %d)\n", err);
-		return 0;
-	}
-
-	printk("Bluetooth initialized\n");
-
-	if (IS_ENABLED(CONFIG_SETTINGS)) {
-		err = settings_load();
+	} else {
+		err = bt_conn_auth_cb_register(&conn_auth_callbacks);
 		if (err) {
-			printk("Failed to load settings (err %d)\n", err);
+			printk("Failed to register authorization callbacks (err %d)\n", err);
 			return 0;
+		}
+
+		err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+		if (err) {
+			printk("Failed to register authorization info callbacks (err %d)\n", err);
+			return 0;
+		}
+
+		printk("Bluetooth initialized\n");
+
+		if (IS_ENABLED(CONFIG_SETTINGS)) {
+			err = settings_load();
+			if (err) {
+				printk("Failed to load settings (err %d)\n", err);
+				return 0;
+			}
 		}
 	}
 

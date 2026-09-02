@@ -1,5 +1,5 @@
 # OS-agnostic recipes for this sample (run from the project directory).
-# West always runs inside the *shared* NCS install from nrfutil — this repo
+# West always runs inside the *shared* NCS install from nrfutil Ã¢â‚¬â€ this repo
 # is not a west workspace and does not vendor Zephyr/NCS.
 #
 # Use forward-slash paths in recipes: on Windows, just/nrfutil eat backslashes.
@@ -37,13 +37,33 @@ west version="v3.4.0" *args:
 
 # Pristine sysbuild (app + FLPR + MCUboot). Example: just build   or   just build v3.3.0
 build version="v3.4.0" *args:
-    {{ launch }} {{ version }} west build -p -b {{ board }} -d {{ build_dir }} {{ app_dir }} --sysbuild -- -D{{ snippet }}_SNIPPET=nordic-flpr {{ args }}
+    {{ launch }} {{ version }} west build -p -b {{ board }} -d {{ build_dir }} {{ app_dir }} --sysbuild -- -D{{ snippet }}_SNIPPET="nordic-flpr;mds-flpr" {{ args }}
 
 build-incr version="v3.4.0" *args:
-    {{ launch }} {{ version }} west build -b {{ board }} -d {{ build_dir }} {{ app_dir }} --sysbuild -- -D{{ snippet }}_SNIPPET=nordic-flpr {{ args }}
+    {{ launch }} {{ version }} west build -b {{ board }} -d {{ build_dir }} {{ app_dir }} --sysbuild -- -D{{ snippet }}_SNIPPET="nordic-flpr;mds-flpr" {{ args }}
+
+# Same as build, but printk/boot on RTT; uart20+uart30 disabled; shell/LOG/DFU on USB CDC.
+rtt_args := ("-D" + snippet + "_EXTRA_CONF_FILE=" + app_dir + "/overlay-rtt.conf "
+    + "-D" + snippet + "_EXTRA_DTC_OVERLAY_FILE=" + app_dir + "/boards/nrf54lm20dk_nrf54lm20b_cpuapp_rtt.overlay "
+    + "-Dremote_EXTRA_CONF_FILE=" + app_dir + "/remote/overlay-rtt.conf "
+    + "-Dremote_EXTRA_DTC_OVERLAY_FILE=" + app_dir + "/remote/boards/nrf54lm20dk_nrf54lm20b_cpuflpr_rtt.overlay")
+
+build-rtt version="v3.4.0" *args:
+    {{ launch }} {{ version }} west build -p -b {{ board }} -d {{ build_dir }} {{ app_dir }} --sysbuild -- -D{{ snippet }}_SNIPPET="nordic-flpr;mds-flpr" {{ rtt_args }} {{ args }}
+
+build-rtt-incr version="v3.4.0" *args:
+    {{ launch }} {{ version }} west build -b {{ board }} -d {{ build_dir }} {{ app_dir }} --sysbuild -- -D{{ snippet }}_SNIPPET="nordic-flpr;mds-flpr" {{ rtt_args }} {{ args }}
 
 flash version="v3.4.0" *args:
     {{ launch }} {{ version }} west flash -d {{ build_dir }} --dev-id {{ jlink_sn }} {{ args }}
 
 dfu version="v3.4.0":
     {{ launch }} {{ version }} {{ py }} {{ app_dir }}/scripts/make_app_update.py --build-dir {{ build_dir }}
+
+# Package coupled image, then upload+test+reset over USB CDC2 (MI_04 / uart-mcumgr).
+# Port: auto-detect VID 2FE3 MI_04, or USB_DFU_PORT=COM12 just usb-dfu
+usb_dfu_port_args := if env("USB_DFU_PORT", "") != "" { "--port " + env("USB_DFU_PORT") } else { "" }
+
+usb-dfu version="v3.4.0":
+    {{ launch }} {{ version }} {{ py }} {{ app_dir }}/scripts/make_app_update.py --build-dir {{ build_dir }}
+    {{ launch }} {{ version }} {{ py }} {{ app_dir }}/scripts/usb_dfu.py --image {{ build_dir }}/dfu/app_update.bin {{ usb_dfu_port_args }}

@@ -2,16 +2,17 @@
 	chosen {
 		/*
 		 * App printk/LOG → debugger VCOM (uart20).
-		 * Shell → USB CDC0. FLPR log stream → USB CDC1.
+		 * USB CDC0 → shell
+		 * USB CDC1 → FLPR log forward (see flpr_ipc.c)
+		 * USB CDC2 → MCUmgr UART SMP DFU (CONFIG_MCUMGR_TRANSPORT_UART)
 		 *
-		 * CDC_ACM_SERIAL_MULTIPLE_INSTANCES only registers UARTs named by
-		 * these chosen nodes (console / shell-uart / uart-mcumgr). Pointing
-		 * uart-mcumgr at cdc_acm_uart1 registers the second CDC without
-		 * enabling UART SMP transport (BLE SMP is used for OTA).
+		 * Stock cdc_acm_serial boot helper only registers chosen CDCs;
+		 * this sample uses src/usb_cdc_triple.c so CDC1 is registered
+		 * even though it is not a chosen backend.
 		 */
 		zephyr,console = &uart20;
 		zephyr,shell-uart = &cdc_acm_uart0;
-		zephyr,uart-mcumgr = &cdc_acm_uart1;
+		zephyr,uart-mcumgr = &cdc_acm_uart2;
 	};
 
 	soc {
@@ -19,12 +20,12 @@
 			#address-cells = <1>;
 			#size-cells = <1>;
 
-			sram_rx: memory@20057c00 {
-				reg = <0x20057c00 0x8000>;
+			sram_rx: memory@20047c00 {
+				reg = <0x20047c00 0x8000>;
 			};
 
-			sram_tx: memory@2005fc00 {
-				reg = <0x2005fc00 0x8000>;
+			sram_tx: memory@2004fc00 {
+				reg = <0x2004fc00 0x8000>;
 			};
 		};
 	};
@@ -63,6 +64,11 @@
 	cdc_acm_uart1: cdc_acm_uart1 {
 		compatible = "zephyr,cdc-acm-uart";
 		label = "CDC_ACM_1";
+	};
+
+	cdc_acm_uart2: cdc_acm_uart2 {
+		compatible = "zephyr,cdc-acm-uart";
+		label = "CDC_ACM_2";
 	};
 };
 

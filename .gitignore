@@ -1,4 +1,4 @@
-﻿# Build and debug artifacts
+# Build and debug artifacts
 build/
 debug-*.log
 .cursor/
@@ -8,4 +8,4 @@ __pycache__/
 # never create a local west workspace here
 .west/
 build/
-
+*.log
