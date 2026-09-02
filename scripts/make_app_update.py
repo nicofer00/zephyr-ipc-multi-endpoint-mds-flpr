@@ -39,10 +39,14 @@ def find_zephyr_base(explicit: str | None) -> Path:
     env = os.environ.get("ZEPHYR_BASE")
     if env:
         return Path(env).resolve()
-    fallback = Path(r"C:\ncs\zephyr")
-    if fallback.is_dir():
-        return fallback.resolve()
-    raise SystemExit("ZEPHYR_BASE is not set and C:\\ncs\\zephyr was not found")
+    # Same discovery as just setup / ncs_launch (no hardcoded install path).
+    scripts_dir = Path(__file__).resolve().parent
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from ncs_launch import ncs_root_for
+
+    version = os.environ.get("NCS_VERSION", "v3.4.0")
+    return (ncs_root_for(version) / "zephyr").resolve()
 
 
 def find_key(zephyr_base: Path, explicit: str | None) -> Path:
