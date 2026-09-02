@@ -107,16 +107,21 @@ After `just build`, sysbuild also runs `make_app_update.py` and writes
 `build/dfu/app_update.bin` (merged app + FLPR, signed for slot0). Or run
 `just dfu` after an incremental build.
 
-Requires `smpmgr` (see Prerequisites). Example:
+Requires `smpmgr` (see Prerequisites). Coupled images are signed with **SHA512**
+MCUboot TLV (required on nRF54L). Older `smpmgr` only looks for SHA256 locally;
+use `--format any` so the device validates the image:
 
 ```text
-smpmgr --ble <bd_addr> upgrade build/dfu/app_update.bin
+smpmgr --ble <bd_addr> upgrade build/dfu/app_update.bin --format any
 ```
+
+(`pip install -U smpmgr` adds SHA512-aware local inspection, but `--format any`
+still works on all versions.)
 
 Or step-by-step:
 
 ```text
-smpmgr --ble <bd_addr> image upload build/dfu/app_update.bin
+smpmgr --ble <bd_addr> image upload build/dfu/app_update.bin --format any
 smpmgr --ble <bd_addr> image state-write <hash>
 smpmgr --ble <bd_addr> os reset
 ```
@@ -152,7 +157,7 @@ Or package once, then call the helper / CLI directly:
 ```text
 just dfu
 python scripts/usb_dfu.py --port COM12
-# or: smpmgr --port COM12 upgrade build/dfu/app_update.bin
+# or: smpmgr --port COM12 upgrade build/dfu/app_update.bin --format any
 ```
 
 One SMP upload updates **both** cores — no separate FLPR flash when FLPR changes.

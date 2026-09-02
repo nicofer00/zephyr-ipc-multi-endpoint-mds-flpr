@@ -77,7 +77,19 @@ def find_smpmgr() -> list[str] | None:
 
 
 def run_smpmgr(smpmgr: list[str], port: str, image: Path, confirm: bool, timeout: float) -> int:
-    cmd = [*smpmgr, "--port", port, "--timeout", str(timeout), "upgrade"]
+    # nRF54L coupled images are signed with MCUboot SHA512 TLV (--sha 512).
+    # Older smpmgr only inspects IMAGE_TLV_SHA256 locally; --format any skips
+    # host-side TLV parsing and lets the device validate the image.
+    cmd = [
+        *smpmgr,
+        "--port",
+        port,
+        "--timeout",
+        str(timeout),
+        "upgrade",
+        "--format",
+        "any",
+    ]
     if confirm:
         cmd.append("--confirm")
     cmd.append(str(image))

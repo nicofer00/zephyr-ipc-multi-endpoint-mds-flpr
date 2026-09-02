@@ -299,6 +299,10 @@ def main() -> int:
     print(f"  {merged_bin}")
     print(f"  {signed_bin}")
     print("Coupled OTA: app_update.bin contains cpuapp + in-slot FLPR payload @ 0xE8000.")
+    print(
+        "Note: image uses MCUboot SHA512 TLV (required on nRF54L). "
+        "For smpmgr, use: smpmgr ... upgrade --format any build/dfu/app_update.bin"
+    )
     return 0
 
 
