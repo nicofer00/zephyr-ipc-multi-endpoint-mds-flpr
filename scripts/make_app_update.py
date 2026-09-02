@@ -24,10 +24,13 @@ DEFAULT_SLOT_SIZE = "0xF2000"  # 968 KiB — full slots (no WITH_FLPR_PARTITIONS
 DEFAULT_VERSION = "1.0.0+0"
 FLPR_PAYLOAD_ADDR = 0xE8000
 FLPR_PAYLOAD_SIZE = 0x18000  # 96 KiB
+# Known names first; otherwise detect any build/<name>/zephyr/zephyr.hex
+# (excluding mcuboot/remote). Clone folder becomes the sysbuild image name.
 APP_IMAGE_CANDIDATES = (
     "multi_endpoint",
     "zephyr-ipc-multi-endpoint-mds-flpr",
 )
+APP_IMAGE_SKIP = {"mcuboot", "remote", "zephyr", "_sysbuild"}
 
 
 def find_zephyr_base(explicit: str | None) -> Path:
@@ -82,6 +85,12 @@ def detect_app_image(build_dir: Path, explicit: str | None) -> str:
     for cand in APP_IMAGE_CANDIDATES:
         if (build_dir / cand / "zephyr" / "zephyr.hex").is_file():
             return cand
+
+    for child in sorted(build_dir.iterdir()):
+        if not child.is_dir() or child.name in APP_IMAGE_SKIP:
+            continue
+        if (child / "zephyr" / "zephyr.hex").is_file():
+            return child.name
 
     raise SystemExit(f"Could not find application zephyr.hex under {build_dir}")
 

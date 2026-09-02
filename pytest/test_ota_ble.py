@@ -35,8 +35,6 @@ def create_coupled_upgrade_image(build_dir: Path, version: str) -> Path:
             str(build_dir),
             "--version",
             version,
-            "--app-image",
-            "multi_endpoint",
         ],
         check=True,
     )
