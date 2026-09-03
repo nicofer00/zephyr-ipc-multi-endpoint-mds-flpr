@@ -67,3 +67,11 @@ usb_dfu_port_args := if env("USB_DFU_PORT", "") != "" { "--port " + env("USB_DFU
 usb-dfu version="v3.4.0":
     {{ launch }} {{ version }} {{ py }} {{ app_dir }}/scripts/make_app_update.py --build-dir {{ build_dir }}
     {{ launch }} {{ version }} {{ py }} {{ app_dir }}/scripts/usb_dfu.py --image {{ build_dir }}/dfu/app_update.bin {{ usb_dfu_port_args }}
+
+# Package coupled image, then upload+test+reset over BLE SMP.
+# Address: BLE_DFU_ADDR=AA:BB:CC:DD:EE:FF just ble-dfu
+ble_dfu_ble_args := if env("BLE_DFU_ADDR", "") != "" { "--ble " + env("BLE_DFU_ADDR") } else { "" }
+
+ble-dfu version="v3.4.0":
+    {{ launch }} {{ version }} {{ py }} {{ app_dir }}/scripts/make_app_update.py --build-dir {{ build_dir }}
+    {{ launch }} {{ version }} {{ py }} {{ app_dir }}/scripts/ble_dfu.py --image {{ build_dir }}/dfu/app_update.bin {{ ble_dfu_ble_args }}

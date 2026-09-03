@@ -301,7 +301,7 @@ def main() -> int:
     print("Coupled OTA: app_update.bin contains cpuapp + in-slot FLPR payload @ 0xE8000.")
     print(
         "Note: image uses MCUboot SHA512 TLV (required on nRF54L). "
-        "For smpmgr, use: smpmgr ... upgrade --format any build/dfu/app_update.bin"
+        "BLE DFU: pair Nordic_Memfault in Windows Bluetooth first, or use just usb-dfu."
     )
     return 0
 

@@ -38,14 +38,18 @@ install** (from nrfutil’s install directory, typically with a `.west` next to
   (the NCS toolchain Python from `nrfutil` works):
 
   ```text
-  python -m pip install smpmgr
+  python -m pip install 'smpmgr>=0.19' 'smpclient[ble]'
   ```
 
-  `smpmgr` is the CLI used by `just usb-dfu` and the README BLE examples.
-  It depends on `smpclient` and `pyserial` (pulled in automatically).
+  `smpmgr` is the CLI used by the README BLE examples. **Use smpmgr 0.19+** for
+  nRF54L coupled images (MCUboot **SHA512** TLV). Older smpmgr only inspects
+  SHA256 and fails before upload.
 
-  If you only need the library API: `python -m pip install smpclient`.
-  `scripts/usb_dfu.py` falls back to `smpclient` when `smpmgr` is absent.
+  `just ble-dfu` and `just usb-dfu` avoid that host check (smpclient fallback or
+  `smpmgr upgrade --format any` when available).
+
+  If you only need the library API: `python -m pip install 'smpclient[ble]'`.
+  `scripts/usb_dfu.py` and `scripts/ble_dfu.py` fall back to smpclient when needed.
 
 ## Commands
 
@@ -57,6 +61,7 @@ just build              # pristine sysbuild, NCS v3.4.0
 just build v3.4.0       # explicit toolchain/SDK version
 just flash
 just dfu                # -> build/dfu/app_update.bin
+just ble-dfu            # package + upload/test/reset over BLE
 just usb-dfu            # package + upload/test/reset on USB CDC2
 just west list          # any west command in the shared workspace
 just ncs-root           # print shared west topdir
@@ -107,23 +112,51 @@ After `just build`, sysbuild also runs `make_app_update.py` and writes
 `build/dfu/app_update.bin` (merged app + FLPR, signed for slot0). Or run
 `just dfu` after an incremental build.
 
-Requires `smpmgr` (see Prerequisites). Coupled images are signed with **SHA512**
-MCUboot TLV (required on nRF54L). Older `smpmgr` only looks for SHA256 locally;
-use `--format any` so the device validates the image:
+Requires `smpmgr>=0.19` (see Prerequisites). Coupled images are signed with
+**SHA512** MCUboot TLV (required on nRF54L). **smpmgr before 0.18** has no
+`--format` option and only checks SHA256 — upgrade smpmgr or use `just ble-dfu`.
+
+**Recommended** (smpmgr 0.19+). Use the **advertised name**, not `bt id-show`
+identity — with `CONFIG_BT_PRIVACY=y` the connectable address rotates:
 
 ```text
-smpmgr --ble <bd_addr> upgrade build/dfu/app_update.bin --format any
+smpmgr --ble Nordic_Memfault --timeout 300 upgrade build/dfu/app_update.bin
 ```
 
-(`pip install -U smpmgr` adds SHA512-aware local inspection, but `--format any`
-still works on all versions.)
-
-Or step-by-step:
+Debug log + connection probe (no upload):
 
 ```text
-smpmgr --ble <bd_addr> image upload build/dfu/app_update.bin --format any
-smpmgr --ble <bd_addr> image state-write <hash>
-smpmgr --ble <bd_addr> os reset
+python scripts/ble_dfu.py --probe --logfile smpmgr_ble_debug.log
+# or:
+smpmgr --ble Nordic_Memfault --timeout 120 --loglevel DEBUG --logfile smpmgr_ble_debug.log image state-read
+```
+
+**Or** use the helper (quiet progress bar, auto-scan by name, 300 s timeout):
+
+```text
+just dfu
+just ble-dfu
+# or: python scripts/ble_dfu.py
+# verbose bleak logs: python scripts/ble_dfu.py -v --logfile smpmgr_ble_debug.log
+# smpmgr CLI instead:  python scripts/ble_dfu.py --smpmgr
+```
+
+`smpmgr` defaults to `--timeout 2` — far too short for a ~900 KiB image and
+secondary-slot erase. Always pass `--timeout 300` (or higher) for BLE upgrade.
+
+**`BleakGATTProtocolError: Insufficient Authentication` (error 5)** or
+**`Could not pair with device: FAILED`:** With default Zephyr SMP settings
+(`CONFIG_BT_SMP_ENFORCE_MITM=y`), **bleak/smpclient cannot complete automated
+Just Works pairing on Windows**. Pair once manually, then retry:
+
+1. DK shell: `bt clear all`
+2. Windows Settings → Bluetooth: pair **Nordic_Memfault** (remove old entry first)
+3. `python scripts/ble_dfu.py --probe` or `just ble-dfu`
+
+For **fully scripted DFU** (no BLE pairing), use USB instead:
+
+```text
+just usb-dfu
 ```
 
 ## Coupled USB CDC DFU (CDC2)
