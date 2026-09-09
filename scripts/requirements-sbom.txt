@@ -1,0 +1,11 @@
+# SBOM tooling for `just sbom` (syft convert + merge).
+#
+# Prefer PATH `syft` (e.g. Chocolatey) if already installed — scripts/sbom_syft.py
+# finds it without this package.
+#
+# Optional Python-wrapped syft 1.51.1 (nightlark wheel branch):
+#   https://github.com/nightlark/anchore-syft-wheel/tree/syft-version-update/1.51.1
+# On Windows this sdist currently needs MSVC/scikit-build to build; use PATH syft
+# there, or install once Linux/macOS / when binary wheels publish:
+#   python -m pip install -r scripts/requirements-sbom.txt
+anchore_syft @ git+https://github.com/nightlark/anchore-syft-wheel.git@syft-version-update/1.51.1

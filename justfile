@@ -1,5 +1,5 @@
 # OS-agnostic recipes for this sample (run from the project directory).
-# West always runs inside the *shared* NCS install from nrfutil Ã¢â‚¬â€ this repo
+# West always runs inside the *shared* NCS install from nrfutil — this repo
 # is not a west workspace and does not vendor Zephyr/NCS.
 #
 # Use forward-slash paths in recipes: on Windows, just/nrfutil eat backslashes.
@@ -75,3 +75,29 @@ ble_dfu_ble_args := if env("BLE_DFU_ADDR", "") != "" { "--ble " + env("BLE_DFU_A
 ble-dfu version="v3.4.0":
     {{ launch }} {{ version }} {{ py }} {{ app_dir }}/scripts/make_app_update.py --build-dir {{ build_dir }}
     {{ launch }} {{ version }} {{ py }} {{ app_dir }}/scripts/ble_dfu.py --image {{ build_dir }}/dfu/app_update.bin {{ ble_dfu_ble_args }} --skip-pair
+
+# SBOM for CVE scanners (grype / GitLab): pristine build → west ncs-sbom (per sysbuild
+# domain, PURLs/CPEs) → syft merge to build/sbom/spdx.json.
+# Needs `syft` on PATH (Chocolatey) or: python -m pip install -r scripts/requirements-sbom.txt
+# (anchore_syft 1.51.1 wheel branch; Windows sdist needs MSVC — prefer PATH syft there).
+# Omit scancode-toolkit (not in nrfutil toolchain; optional for CVE/PURL SBOMs). For full
+# license scanning: nrfutil toolchain-manager launch --ncs-version=v3.4.0 -- \
+#   pip3 install -r nrf/scripts/requirements-west-ncs-sbom.txt
+# ncs-sbom can still take several minutes.
+ncs_sbom_detectors := "spdx-tag,full-text,external-file,git-info"
+
+sbom version="v3.4.0" *args:
+    {{ launch }} {{ version }} west build -p -b {{ board }} -d {{ build_dir }} {{ app_dir }} --sysbuild -- -D{{ snippet }}_SNIPPET="nordic-flpr;mds-flpr" {{ args }}
+    {{ py }} -c "from pathlib import Path; Path(r'{{ build_dir }}/sbom').mkdir(parents=True, exist_ok=True)"
+    {{ launch }} {{ version }} west ncs-sbom -d {{ build_dir }} --license-detectors {{ ncs_sbom_detectors }} --output-spdx {{ build_dir }}/sbom/sbom_{domain}.spdx
+    {{ py }} {{ app_dir }}/scripts/sbom_syft.py --build-dir {{ build_dir }} --name {{ snippet }}
+
+# Reuse an existing build: west ncs-sbom + syft merge only (no rebuild).
+sbom-from-build version="v3.4.0":
+    {{ py }} -c "from pathlib import Path; Path(r'{{ build_dir }}/sbom').mkdir(parents=True, exist_ok=True)"
+    {{ launch }} {{ version }} west ncs-sbom -d {{ build_dir }} --license-detectors {{ ncs_sbom_detectors }} --output-spdx {{ build_dir }}/sbom/sbom_{domain}.spdx
+    {{ py }} {{ app_dir }}/scripts/sbom_syft.py --build-dir {{ build_dir }} --name {{ snippet }}
+
+# CVE triage against the merged SBOM (relative path for Windows sbom: scheme).
+grype-sbom:
+    grype sbom:build/sbom/spdx.json
