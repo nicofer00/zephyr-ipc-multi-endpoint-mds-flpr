@@ -1,0 +1,18 @@
+/*
+ * Optional RTT boot console - apply with overlay-rtt.conf (just build-rtt).
+ *
+ * - Disables debugger uart20 (frees the UART peripheral / pins)
+ * - printk / early boot go to SEGGER RTT (no USB wait, non-blocking)
+ * - Shell remains USB CDC0; FLPR logs CDC1; MCUmgr DFU CDC2
+ *   (from nrf54lm20dk_nrf54lm20b_cpuapp.overlay)
+ */
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+	};
+};
+
+&uart20 {
+	status = "disabled";
+};

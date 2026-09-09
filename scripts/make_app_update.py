@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Nordic Semiconductor ASA
 # SPDX-License-Identifier: Apache-2.0
-"""Build DFU artifacts for this sample.
+"""Build DFU artifacts for this sample (Strategy B coupled FLPR + cpuapp OTA).
 
-With the nordic-flpr layout, FLPR RRAM (@0x1e5000) sits *outside* the MCUboot
-slot0/slot1 regions. So:
+Default (coupled):
+- mergehex(remote, app) → app_and_flpr_merged.hex
+- imgtool sign merged hex → build/dfu/app_update.bin (single MCUboot slot image)
 
-- ``app_update.bin`` — MCUboot-signed **cpuapp** image for BLE OTA (slot0/slot1).
-  Prefer the build system's ``zephyr.signed.bin`` when present (Ed25519 on NCS 3.4).
-- ``app_and_flpr_merged.hex`` — mergehex of app + FLPR for inspection / dual-hex
-  factory programming (not a single MCUboot slot payload).
-
-Optional ``--resign-merged`` attempts imgtool on the merged hex (usually fails
-with the stock FLPR partition map because the address span exceeds slot size).
+``--cpuapp-only`` signs cpuapp zephyr.hex / zephyr.signed.bin only (debug).
 """
 
 from __future__ import annotations
@@ -25,12 +20,58 @@ import sys
 from pathlib import Path
 
 
-DEFAULT_SLOT_SIZE = "0xE6000"  # 920 KiB — nordic-flpr WITH_FLPR_PARTITIONS
-DEFAULT_VERSION = "1.0.0+0"
+DEFAULT_SLOT_SIZE = "0xF2000"  # 968 KiB — full slots (no WITH_FLPR_PARTITIONS)
+FLPR_PAYLOAD_ADDR = 0xE8000
+FLPR_PAYLOAD_SIZE = 0x18000  # 96 KiB
+# Known names first; otherwise detect any build/<name>/zephyr/zephyr.hex
+# (excluding mcuboot/remote). Clone folder becomes the sysbuild image name.
 APP_IMAGE_CANDIDATES = (
     "multi_endpoint",
     "zephyr-ipc-multi-endpoint-mds-flpr",
 )
+APP_IMAGE_SKIP = {"mcuboot", "remote", "zephyr", "_sysbuild"}
+SAMPLE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def parse_version_file(path: Path) -> str:
+    """Parse Zephyr VERSION → imgtool string MAJOR.MINOR.PATCH+TWEAK.
+
+    Matches Zephyr ``APP_VERSION_TWEAK_STRING`` / ``CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION``.
+    ``EXTRAVERSION`` is intentionally omitted: imgtool only accepts
+    ``maj.min.rev+build`` (no ``-extra`` segment).
+    """
+    if not path.is_file():
+        raise SystemExit(f"VERSION file not found: {path}")
+
+    fields: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or "=" not in line:
+            continue
+        key, val = [p.strip() for p in line.split("=", 1)]
+        fields[key] = val
+
+    for req in ("VERSION_MAJOR", "VERSION_MINOR", "PATCHLEVEL", "VERSION_TWEAK"):
+        if req not in fields or fields[req] == "":
+            raise SystemExit(f"{path}: missing {req}")
+
+    major = fields["VERSION_MAJOR"]
+    minor = fields["VERSION_MINOR"]
+    patch = fields["PATCHLEVEL"]
+    tweak = fields["VERSION_TWEAK"]
+    return f"{major}.{minor}.{patch}+{tweak}"
+
+
+def version_file_extra(path: Path) -> str:
+    """Return EXTRAVERSION from a VERSION file (informational; not used for imgtool)."""
+    if not path.is_file():
+        return ""
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line.startswith("EXTRAVERSION"):
+            _, _, val = line.partition("=")
+            return val.strip()
+    return ""
 
 
 def find_zephyr_base(explicit: str | None) -> Path:
@@ -39,10 +80,14 @@ def find_zephyr_base(explicit: str | None) -> Path:
     env = os.environ.get("ZEPHYR_BASE")
     if env:
         return Path(env).resolve()
-    fallback = Path(r"C:\ncs\zephyr")
-    if fallback.is_dir():
-        return fallback.resolve()
-    raise SystemExit("ZEPHYR_BASE is not set and C:\\ncs\\zephyr was not found")
+    # Same discovery as just setup / ncs_launch (no hardcoded install path).
+    scripts_dir = Path(__file__).resolve().parent
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from ncs_launch import ncs_root_for
+
+    version = os.environ.get("NCS_VERSION", "v3.4.0")
+    return (ncs_root_for(version) / "zephyr").resolve()
 
 
 def find_key(zephyr_base: Path, explicit: str | None) -> Path:
@@ -86,7 +131,61 @@ def detect_app_image(build_dir: Path, explicit: str | None) -> str:
         if (build_dir / cand / "zephyr" / "zephyr.hex").is_file():
             return cand
 
+    for child in sorted(build_dir.iterdir()):
+        if not child.is_dir() or child.name in APP_IMAGE_SKIP:
+            continue
+        if (child / "zephyr" / "zephyr.hex").is_file():
+            return child.name
+
     raise SystemExit(f"Could not find application zephyr.hex under {build_dir}")
+
+
+def hex_address_span(hex_path: Path) -> tuple[int, int]:
+    """Return (min_addr, max_exclusive) for data records in an Intel HEX file."""
+    upper = 0
+    min_addr: int | None = None
+    max_addr = 0
+
+    with hex_path.open(encoding="ascii") as f:
+        for line in f:
+            if not line.startswith(":"):
+                continue
+            count = int(line[1:3], 16)
+            addr = int(line[3:7], 16)
+            rectype = int(line[7:9], 16)
+            if rectype == 2:
+                upper = int(line[9:13], 16) << 4
+            elif rectype == 4:
+                upper = int(line[9:13], 16) << 16
+            elif rectype == 0:
+                full = upper + addr
+                min_addr = full if min_addr is None else min(min_addr, full)
+                max_addr = max(max_addr, full + count)
+            elif rectype == 1:
+                break
+
+    if min_addr is None:
+        raise SystemExit(f"No data records in {hex_path}")
+
+    return min_addr, max_addr
+
+
+def verify_flpr_hex(flpr_hex: Path) -> None:
+    min_addr, max_addr = hex_address_span(flpr_hex)
+    span = max_addr - min_addr
+
+    if min_addr != FLPR_PAYLOAD_ADDR:
+        raise SystemExit(
+            f"FLPR hex starts at {min_addr:#x}, expected {FLPR_PAYLOAD_ADDR:#x}. "
+            "Rebuild remote with coupled overlay (cpuflpr_rram @ 0xE8000)."
+        )
+    if span > FLPR_PAYLOAD_SIZE:
+        raise SystemExit(
+            f"FLPR image span {span} bytes ({span:#x}) exceeds partition "
+            f"{FLPR_PAYLOAD_SIZE} bytes ({FLPR_PAYLOAD_SIZE:#x})."
+        )
+
+    print(f"FLPR payload OK: {min_addr:#x}..{max_addr:#x} ({span} bytes)")
 
 
 def run(cmd: list[str]) -> None:
@@ -94,9 +193,73 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
+def sign_image(imgtool: Path, key: Path, slot_size: str, version: str, src: Path, dst: Path) -> None:
+    """Sign like NCS image_signing.cmake for nRF54L ed25519 builds.
+
+    Matches the board build: ``--sha 512 --rom-fixed 0x10000 --header-size 0x800``
+    and **no** ``--pad-header`` (input already has the 0x800 zero header gap).
+    Using ``--pad-header`` on such an image shifts app+FLPR by +0x800 and breaks
+    XIP / VPR load addresses. SHA256 TLVs are rejected by img_mgmt (expects
+    IMAGE_SHA_LEN=64 / SHA512), so slot1 never appears after upload.
+    """
+    run(
+        [
+            sys.executable,
+            str(imgtool),
+            "sign",
+            "--version",
+            version,
+            "--align",
+            "16",
+            "--slot-size",
+            slot_size,
+            "--header-size",
+            "0x800",
+            "--rom-fixed",
+            "0x10000",
+            "--sha",
+            "512",
+            "-k",
+            str(key),
+            str(src),
+            str(dst),
+        ]
+    )
+
+
+def merged_hex_to_bin(merged_hex: Path, out_bin: Path) -> None:
+    """Flatten merged Intel HEX to a contiguous bin (minaddr..maxaddr)."""
+    try:
+        from intelhex import IntelHex
+    except ImportError as exc:
+        raise SystemExit(
+            "intelhex is required to flatten the merged image; "
+            "use the NCS toolchain Python or: pip install intelhex"
+        ) from exc
+
+    ih = IntelHex(str(merged_hex))
+    data = bytes(ih.tobinarray(start=ih.minaddr(), end=ih.maxaddr()))
+    # Slot image must start at slot base with zeroed MCUboot header gap.
+    if ih.minaddr() != 0x10000:
+        raise SystemExit(
+            f"Merged hex minaddr {ih.minaddr():#x} != slot base 0x10000"
+        )
+    if any(data[:0x800]):
+        raise SystemExit("Merged image header gap (first 0x800) is not zeros")
+
+    flpr_off = FLPR_PAYLOAD_ADDR - 0x10000
+    if flpr_off + 16 > len(data):
+        raise SystemExit("Merged image shorter than FLPR payload offset")
+    print(
+        f"Merged bin: {len(data)} bytes; FLPR@{flpr_off:#x}="
+        f"{data[flpr_off:flpr_off+4].hex()}"
+    )
+    out_bin.write_bytes(data)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Create DFU artifacts (app_update.bin + optional mergehex)"
+        description="Create coupled DFU artifacts (merged app+FLPR app_update.bin)"
     )
     parser.add_argument(
         "--build-dir",
@@ -110,8 +273,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--version",
-        default=DEFAULT_VERSION,
-        help=f"imgtool version if --resign-* is used (default: {DEFAULT_VERSION})",
+        default="",
+        help="imgtool version string (default: sample VERSION file → APP_VERSION_TWEAK_STRING)",
+    )
+    parser.add_argument(
+        "--version-file",
+        default="",
+        help="Path to Zephyr VERSION file (default: <sample>/VERSION)",
     )
     parser.add_argument(
         "--slot-size",
@@ -125,14 +293,9 @@ def main() -> int:
         help="Zephyr tree (default: $ZEPHYR_BASE or C:\\ncs\\zephyr)",
     )
     parser.add_argument(
-        "--resign-app",
+        "--cpuapp-only",
         action="store_true",
-        help="Re-sign app zephyr.hex with imgtool instead of copying zephyr.signed.bin",
-    )
-    parser.add_argument(
-        "--resign-merged",
-        action="store_true",
-        help="Also imgtool-sign the merged app+FLPR hex (usually too large for slot0)",
+        help="Sign cpuapp-only image (no FLPR merge); debug / legacy",
     )
     args = parser.parse_args()
 
@@ -140,6 +303,9 @@ def main() -> int:
     zephyr_base = find_zephyr_base(args.zephyr_base or None)
     app_image = detect_app_image(build_dir, args.app_image or None)
     key = find_key(zephyr_base, args.key or None)
+    version_file = Path(args.version_file).resolve() if args.version_file else (SAMPLE_ROOT / "VERSION")
+    version = args.version or parse_version_file(version_file)
+    extra = "" if args.version else version_file_extra(version_file)
 
     app_hex = build_dir / app_image / "zephyr" / "zephyr.hex"
     app_signed_bin = build_dir / app_image / "zephyr" / "zephyr.signed.bin"
@@ -158,65 +324,36 @@ def main() -> int:
     print(f"App:  {app_hex}")
     print(f"FLPR: {flpr_hex}")
     print(f"Key:  {key}")
-    print(f"Slot: {args.slot_size}  Version: {args.version}")
+    src_note = "--version" if args.version else str(version_file)
+    print(f"Slot: {args.slot_size}  Version: {version}  (from {src_note})")
+    if extra:
+        print(f"VERSION EXTRAVERSION={extra!r} ignored for imgtool (uses maj.min.rev+build only)")
 
+    if args.cpuapp_only:
+        if app_signed_bin.is_file():
+            shutil.copy2(app_signed_bin, signed_bin)
+            print(f"Copied build-signed cpuapp image -> {signed_bin}")
+        else:
+            app_bin = build_dir / app_image / "zephyr" / "zephyr.bin"
+            src = app_bin if app_bin.is_file() else app_hex
+            sign_image(imgtool, key, args.slot_size, version, src, signed_bin)
+        print("Wrote (cpuapp-only):", signed_bin)
+        return 0
+
+    verify_flpr_hex(flpr_hex)
     run([sys.executable, str(mergehex), str(flpr_hex), str(app_hex), "-o", str(merged)])
-
-    if args.resign_app or not app_signed_bin.is_file():
-        print("Signing app hex with imgtool → app_update.bin")
-        run(
-            [
-                sys.executable,
-                str(imgtool),
-                "sign",
-                "--version",
-                args.version,
-                "--align",
-                "16",
-                "--slot-size",
-                args.slot_size,
-                "--pad-header",
-                "--header-size",
-                "0x800",
-                "-k",
-                str(key),
-                str(app_hex),
-                str(signed_bin),
-            ]
-        )
-    else:
-        shutil.copy2(app_signed_bin, signed_bin)
-        print(f"Copied build-signed image -> {signed_bin}")
-
-    if args.resign_merged:
-        signed_merged = out_dir / "app_and_flpr_merged.signed.hex"
-        run(
-            [
-                sys.executable,
-                str(imgtool),
-                "sign",
-                "--version",
-                args.version,
-                "--align",
-                "16",
-                "--slot-size",
-                args.slot_size,
-                "--pad-header",
-                "--header-size",
-                "0x800",
-                "-k",
-                str(key),
-                str(merged),
-                str(signed_merged),
-            ]
-        )
+    merged_bin = out_dir / "app_and_flpr_merged.bin"
+    merged_hex_to_bin(merged, merged_bin)
+    sign_image(imgtool, key, args.slot_size, version, merged_bin, signed_bin)
 
     print("Wrote:")
     print(f"  {merged}")
+    print(f"  {merged_bin}")
     print(f"  {signed_bin}")
+    print("Coupled OTA: app_update.bin contains cpuapp + in-slot FLPR payload @ 0xE8000.")
     print(
-        "Note: with nordic-flpr, FLPR is outside MCUboot slots; "
-        "app_update.bin is cpuapp-only. Reflash remote when FLPR changes."
+        "Note: image uses MCUboot SHA512 TLV (required on nRF54L). "
+        "BLE DFU: pair Nordic_Memfault in Windows Bluetooth first, or use just usb-dfu."
     )
     return 0
 

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -128,6 +129,7 @@ def main() -> int:
         return doctor(version)
 
     root = ncs_root_for(version)
+    zephyr_base = (root / "zephyr").resolve()
     cmd = [_normalize_arg(a) for a in sys.argv[2:]]
     argv = [
         "nrfutil",
@@ -139,7 +141,11 @@ def main() -> int:
         *cmd,
     ]
     print("+", " ".join(argv), flush=True)
-    return subprocess.call(argv)
+    env = os.environ.copy()
+    env["ZEPHYR_BASE"] = str(zephyr_base)
+    env["WEST_TOPDIR"] = str(root.resolve())
+    env["NCS_VERSION"] = version
+    return subprocess.call(argv, env=env)
 
 
 if __name__ == "__main__":

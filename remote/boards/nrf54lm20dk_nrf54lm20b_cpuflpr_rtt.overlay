@@ -1,0 +1,15 @@
+/*
+ * Optional FLPR RTT console - apply with remote/overlay-rtt.conf.
+ * Disables debugger uart30; local printk goes to RTT.
+ */
+
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+	};
+};
+
+&uart30 {
+	status = "disabled";
+};

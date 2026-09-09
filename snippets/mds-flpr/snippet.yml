@@ -1,0 +1,8 @@
+name: mds-flpr
+append:
+  EXTRA_DTC_OVERLAY_FILE: mds-flpr.overlay
+
+boards:
+  /.*/nrf54lm20b/cpuapp/:
+    append:
+      EXTRA_DTC_OVERLAY_FILE: soc/nrf54lm20b_cpuapp.overlay

@@ -1,6 +1,7 @@
 #include "flpr_ipc.h"
 
 #include <zephyr/kernel.h>
+#include <zephyr/dfu/mcuboot.h>
 
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
@@ -23,6 +24,13 @@
 #define CON_STATUS_LED DK_LED2
 
 #define RUN_LED_BLINK_INTERVAL 1000
+
+/* Stable advertiser address so nRF Connect / Memfault see the same device after
+ * disconnect (default privacy RPA rotation looks like a new peripheral).
+ */
+static const struct bt_le_adv_param *const adv_param =
+	BT_LE_ADV_PARAM(BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_USE_IDENTITY,
+			BT_GAP_ADV_FAST_INT_MIN_2, BT_GAP_ADV_FAST_INT_MAX_2, NULL);
 
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -63,7 +71,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 
 static void adv_work_handler(struct k_work *work)
 {
-	int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_2, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+	int err = bt_le_adv_start(adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 
 	if (err) {
 		printk("Advertising failed to start (err %d)\n", err);
@@ -78,21 +86,6 @@ static void advertising_start(void)
 	k_work_submit(&adv_work);
 }
 
-static void connected(struct bt_conn *conn, uint8_t conn_err)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	if (conn_err) {
-		printk("Connection failed, err 0x%02x %s\n", conn_err, bt_hci_err_to_str(conn_err));
-		return;
-	}
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-	printk("Connected %s\n", addr);
-
-	dk_set_led_on(CON_STATUS_LED);
-}
-
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	printk("Disconnected, reason 0x%02x %s\n", reason, bt_hci_err_to_str(reason));
@@ -102,12 +95,31 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	if (conn == mds_conn) {
 		mds_conn = NULL;
 	}
+	/* Do not restart advertising here: with CONFIG_BT_MAX_CONN=1 the conn
+	 * object is still held until recycled_cb(). That is where we advertise.
+	 */
 }
 
 static void recycled_cb(void)
 {
 	printk("Connection object available from previous conn. Disconnect is complete!\n");
 	advertising_start();
+}
+
+static void connected(struct bt_conn *conn, uint8_t conn_err)
+{
+	char addr[BT_ADDR_LE_STR_LEN];
+
+	if (conn_err) {
+		printk("Connection failed, err 0x%02x %s\n", conn_err, bt_hci_err_to_str(conn_err));
+		/* Failed connect still frees the slot via recycled → advertising. */
+		return;
+	}
+
+	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+	printk("Connected %s\n", addr);
+
+	dk_set_led_on(CON_STATUS_LED);
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -254,8 +266,24 @@ int main(void)
 {
 	uint32_t blink_status = 0;
 	int err;
+	size_t id_count = 1;
+	bt_addr_le_t addrs[CONFIG_BT_ID_MAX];
+	char addr_str[BT_ADDR_LE_STR_LEN];
 
 	printk("Starting Bluetooth Memfault sample with FLPR IPC\n");
+	printk("APP version: %s\n", CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION);
+
+	/* After MCUboot test-swap, confirm so secondary is free for the next A/B DFU.
+	 * Without this, img_mgmt returns NO_FREE_SLOT until confirm or revert.
+	 */
+	if (!boot_is_img_confirmed()) {
+		err = boot_write_img_confirmed();
+		if (err) {
+			printk("Failed to confirm MCUboot image (err %d)\n", err);
+		} else {
+			printk("MCUboot image confirmed (A/B slot freed)\n");
+		}
+	}
 
 	err = dk_leds_init();
 	if (err) {
@@ -278,28 +306,33 @@ int main(void)
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return 0;
-	}
-
-	err = bt_conn_auth_cb_register(&conn_auth_callbacks);
-	if (err) {
-		printk("Failed to register authorization callbacks (err %d)\n", err);
-		return 0;
-	}
-
-	err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
-	if (err) {
-		printk("Failed to register authorization info callbacks (err %d)\n", err);
-		return 0;
-	}
-
-	printk("Bluetooth initialized\n");
-
-	if (IS_ENABLED(CONFIG_SETTINGS)) {
-		err = settings_load();
+	} else {
+		err = bt_conn_auth_cb_register(&conn_auth_callbacks);
 		if (err) {
-			printk("Failed to load settings (err %d)\n", err);
+			printk("Failed to register authorization callbacks (err %d)\n", err);
 			return 0;
+		}
+
+		err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+		if (err) {
+			printk("Failed to register authorization info callbacks (err %d)\n", err);
+			return 0;
+		}
+
+		printk("Bluetooth initialized\n");
+
+		if (IS_ENABLED(CONFIG_SETTINGS)) {
+			err = settings_load();
+			if (err) {
+				printk("Failed to load settings (err %d)\n", err);
+				return 0;
+			}
+		}
+
+		bt_id_get(addrs, &id_count);
+		if (id_count > 0) {
+			bt_addr_le_to_str(&addrs[0], addr_str, sizeof(addr_str));
+			printk("Identity address (stable advertiser): %s\n", addr_str);
 		}
 	}
 
