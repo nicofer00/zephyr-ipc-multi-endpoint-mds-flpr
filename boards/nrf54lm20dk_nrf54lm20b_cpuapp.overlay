@@ -77,3 +77,8 @@
 	status = "okay";
 	spi-max-frequency = <8000000>;
 };
+
+/* Button0 (sw0) on P1.26 — PORT sense for System OFF / idle GPIO wake. */
+&gpio1 {
+	sense-edge-mask = <0x04000000>; /* BIT(26) */
+};

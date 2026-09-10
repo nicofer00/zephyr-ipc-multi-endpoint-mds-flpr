@@ -1,4 +1,5 @@
 #include "flpr_ipc.h"
+#include "sleep_shell.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/dfu/mcuboot.h>
@@ -186,6 +187,8 @@ static void button_handler(uint32_t button_state, uint32_t has_changed)
 	int err;
 	uint32_t buttons = button_state & has_changed;
 
+	sleep_shell_button_notify(buttons);
+
 	if (buttons & DK_BTN1_MSK) {
 		time_measure_start = !time_measure_start;
 
@@ -258,7 +261,9 @@ static void bas_notify(void)
 
 static void bas_work_handler(struct k_work *work)
 {
-	bas_notify();
+	if (!sleep_shell_is_quiesced()) {
+		bas_notify();
+	}
 	k_work_reschedule((struct k_work_delayable *)work, K_SECONDS(1));
 }
 
@@ -272,6 +277,7 @@ int main(void)
 
 	printk("Starting Bluetooth Memfault sample with FLPR IPC\n");
 	printk("APP version: %s\n", CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION);
+	sleep_shell_print_reset_cause();
 
 	/* After MCUboot test-swap, confirm so secondary is free for the next A/B DFU.
 	 * Without this, img_mgmt returns NO_FREE_SLOT until confirm or revert.
@@ -347,7 +353,11 @@ int main(void)
 	k_work_schedule(&bas_work, K_SECONDS(1));
 
 	for (;;) {
-		dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
+		if (!sleep_shell_is_quiesced()) {
+			dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
+		} else {
+			dk_set_led(RUN_STATUS_LED, 0);
+		}
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
 	}
 }

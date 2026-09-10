@@ -12,6 +12,8 @@
  * two CDCs, so this file replaces the stock boot init.
  */
 
+#include "usb_cdc_triple.h"
+
 #include <zephyr/device.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
@@ -170,6 +172,17 @@ static int usb_cdc_triple_init(void)
 	printk("USB CDC: shell/FLPR/SMP enabled\n");
 
 	return 0;
+}
+
+int usb_cdc_triple_disable(void)
+{
+	int err = usbd_disable(&cdc_acm_serial);
+
+	if (err) {
+		LOG_ERR("usbd_disable failed (%d)", err);
+	}
+
+	return err;
 }
 
 SYS_INIT(usb_cdc_triple_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
