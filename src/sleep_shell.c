@@ -38,8 +38,8 @@ enum sleep_wake_src {
 };
 
 static atomic_t quiesced;
-static struct k_sem wake_sem;
 static enum sleep_wake_src wake_src;
+static const struct shell *idle_sh;
 static const struct gpio_dt_spec sw0 = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
 
 bool sleep_shell_is_quiesced(void)
@@ -52,6 +52,25 @@ static void set_quiesced(bool on)
 	atomic_set(&quiesced, on ? 1 : 0);
 }
 
+static void idle_finish(const struct shell *sh)
+{
+	/* Only one wake path may complete (CDC bypass vs Button0). */
+	if (!atomic_cas(&quiesced, 1, 0)) {
+		return;
+	}
+
+	shell_set_bypass(sh, NULL, NULL);
+	idle_sh = NULL;
+
+	if (wake_src == SLEEP_WAKE_UART) {
+		shell_print(sh, "Woke from System ON idle (source: uart)");
+	} else if (wake_src == SLEEP_WAKE_GPIO) {
+		shell_print(sh, "Woke from System ON idle (source: gpio)");
+	} else {
+		shell_print(sh, "Woke from System ON idle (source: unknown)");
+	}
+}
+
 void sleep_shell_button_notify(uint32_t buttons)
 {
 	if (!sleep_shell_is_quiesced()) {
@@ -59,8 +78,12 @@ void sleep_shell_button_notify(uint32_t buttons)
 	}
 
 	if (buttons & DK_BTN1_MSK) {
+		const struct shell *sh = idle_sh;
+
 		wake_src = SLEEP_WAKE_GPIO;
-		k_sem_give(&wake_sem);
+		if (sh != NULL) {
+			idle_finish(sh);
+		}
 	}
 }
 
@@ -126,12 +149,11 @@ static int stop_ble_activity(const struct shell *sh)
 
 static void idle_bypass_cb(const struct shell *sh, uint8_t *data, size_t len, void *user_data)
 {
-	ARG_UNUSED(sh);
 	ARG_UNUSED(user_data);
 
 	if (len > 0U && data != NULL) {
 		wake_src = SLEEP_WAKE_UART;
-		k_sem_give(&wake_sem);
+		idle_finish(sh);
 	}
 }
 
@@ -242,37 +264,25 @@ static int cmd_idle(const struct shell *sh, size_t argc, char **argv)
 	ARG_UNUSED(argc);
 	ARG_UNUSED(argv);
 
-	static bool sem_inited;
-
-	if (!sem_inited) {
-		k_sem_init(&wake_sem, 0, 1);
-		sem_inited = true;
+	/*
+	 * Do not block the shell thread. Bypass RX is handled by shell_process()
+	 * on that same thread (see Zephyr shell_thread / state_collect). Blocking
+	 * here deadlocks CDC wake; match the shell "devmem load" pattern: arm
+	 * bypass and return so the shell thread can drain RX.
+	 */
+	if (sleep_shell_is_quiesced()) {
+		shell_warn(sh, "Already in System ON idle");
+		return -EALREADY;
 	}
 
-	while (k_sem_take(&wake_sem, K_NO_WAIT) == 0) {
-		/* drain */
-	}
 	wake_src = SLEEP_WAKE_NONE;
-
+	idle_sh = sh;
 	set_quiesced(true);
 	(void)stop_ble_activity(sh);
 
 	shell_print(sh, "System ON idle: type a character or press Button0");
 	shell_print(sh, "(BLE advertising stopped; use 'bt advertise on' after wake if needed)");
 	shell_set_bypass(sh, idle_bypass_cb, NULL);
-
-	(void)k_sem_take(&wake_sem, K_FOREVER);
-
-	shell_set_bypass(sh, NULL, NULL);
-	set_quiesced(false);
-
-	if (wake_src == SLEEP_WAKE_UART) {
-		shell_print(sh, "Woke from System ON idle (source: uart)");
-	} else if (wake_src == SLEEP_WAKE_GPIO) {
-		shell_print(sh, "Woke from System ON idle (source: gpio)");
-	} else {
-		shell_print(sh, "Woke from System ON idle (source: unknown)");
-	}
 
 	return 0;
 }
