@@ -92,8 +92,19 @@ just flash
 
 Uses `overlay-rtt.conf` + `*_rtt.overlay` (app and remote): disables **uart20** / **uart30**,
 sends `printk` / early boot to **SEGGER RTT** (non-blocking, no USB wait), keeps shell,
-shell LOG, FLPR IPC logs, and DFU on the three USB CDCs. View boot with J-Link RTT Viewer
-(SWD, auto control-block detect) while CDC hosts remain independent.
+shell LOG, FLPR IPC logs, and DFU on the three USB CDCs.
+
+View both cores concurrently with the dual RTT script (one J-Link session, SWD 4 kHz;
+defaults: M33 CB `0x20000470`, FLPR CB `0x20070a10`):
+
+```text
+python -m pip install pylink-square rich
+just rtt
+# or: python scripts/dual_rtt.py
+```
+
+J-Link RTT Viewer still works for a single core (SWD, address or auto-detect) while CDC
+hosts remain independent.
 
 ## SPI00 flash CLI
 

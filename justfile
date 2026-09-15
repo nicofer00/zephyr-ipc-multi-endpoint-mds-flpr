@@ -57,6 +57,12 @@ build-rtt-incr version="v3.4.0" *args:
 flash version="v3.4.0" *args:
     {{ launch }} {{ version }} west flash -d {{ build_dir }} --dev-id {{ jlink_sn }} {{ args }}
 
+# Dual-pane SEGGER RTT viewer (cpuapp M33 + FLPR RV32) via pylink-square.
+# Requires: python -m pip install pylink-square rich
+# Env: JLINK_SN (default below). Extra args: just rtt -- --poll-ms 10
+rtt *args:
+    {{ py }} {{ app_dir }}/scripts/dual_rtt.py --sn {{ jlink_sn }} {{ args }}
+
 dfu version="v3.4.0":
     {{ launch }} {{ version }} {{ py }} {{ app_dir }}/scripts/make_app_update.py --build-dir {{ build_dir }}
 
