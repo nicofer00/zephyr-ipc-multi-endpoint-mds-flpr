@@ -200,13 +200,19 @@ class DualRttApp:
         self.m33_cb = m33_cb
         self.flpr_cb = flpr_cb
         self.error: str | None = None
+        # UI scroll: 0 = pinned to newest (auto-tail). Higher = look further back.
+        self.focus = "m33"  # "m33" | "flpr"
+        self.m33_scroll = 0
+        self.flpr_scroll = 0
+        self._body_rows = 20
 
     def open(self) -> None:
-        import pylink
+        from pylink import enums
+        from pylink.jlink import JLink
 
-        jlink = pylink.JLink()
+        jlink = JLink()
         jlink.open(serial_no=int(self.sn) if str(self.sn).isdigit() else self.sn)
-        jlink.set_tif(pylink.enums.JLinkInterfaces.SWD)
+        jlink.set_tif(enums.JLinkInterfaces.SWD)
         jlink.connect(DEFAULT_DEVICE, speed=self.speed_khz)
         # Keep targets running — RTT is polled from live RAM.
         if jlink.halted():
@@ -246,27 +252,139 @@ class DualRttApp:
                 self.error = str(exc)
             self.stop.wait(self.poll_s)
 
-    def render(self):
-        from rich.console import Group
+    def _scroll_attr(self) -> str:
+        return "m33_scroll" if self.focus == "m33" else "flpr_scroll"
+
+    def _focused_lines(self) -> Deque[str]:
+        return self.m33_lines if self.focus == "m33" else self.flpr_lines
+
+    def _max_scroll(self, lines: Deque[str]) -> int:
+        return max(0, len(lines) - self._body_rows)
+
+    def _nudge_scroll(self, delta: int) -> None:
+        lines = self._focused_lines()
+        attr = self._scroll_attr()
+        cur = getattr(self, attr)
+        new = max(0, min(self._max_scroll(lines), cur + delta))
+        setattr(self, attr, new)
+
+    def _follow_bottom(self) -> None:
+        setattr(self, self._scroll_attr(), 0)
+
+    def handle_keys(self) -> None:
+        """Non-blocking keyboard: Tab focus, arrows/PgUp/PgDn/Home/End scroll."""
+        while True:
+            key = _read_key()
+            if key is None:
+                return
+            kind, payload = key
+            if kind == "char":
+                if payload in (b"\t", "\t"):
+                    self.focus = "flpr" if self.focus == "m33" else "m33"
+                elif payload in (b"q", b"Q", "q", "Q"):
+                    self.stop.set()
+                elif payload in (b"\x03",):  # Ctrl+C
+                    self.stop.set()
+                continue
+            # special / named
+            name = payload if kind == "named" else _win_special_name(payload)
+            if name == "up":
+                self._nudge_scroll(1)
+            elif name == "down":
+                self._nudge_scroll(-1)
+            elif name == "pgup":
+                self._nudge_scroll(self._body_rows)
+            elif name == "pgdn":
+                self._nudge_scroll(-self._body_rows)
+            elif name == "home":
+                lines = self._focused_lines()
+                setattr(self, self._scroll_attr(), self._max_scroll(lines))
+            elif name == "end":
+                self._follow_bottom()
+
+    def _viewport_lines(
+        self,
+        lines: Deque[str],
+        max_rows: int,
+        max_cols: int,
+        status: str,
+        scroll_offset: int,
+    ):
+        """Fixed-height body. scroll_offset=0 tails newest; higher looks further back."""
+        from rich.text import Text
+
+        if max_rows < 1:
+            max_rows = 1
+        if max_cols < 8:
+            max_cols = 8
+
+        if not lines:
+            body = Text.from_markup(f"[dim]{status}[/dim]")
+            for _ in range(max_rows - 1):
+                body.append("\n")
+            return body
+
+        all_lines = list(lines)
+        n = len(all_lines)
+        max_off = max(0, n - max_rows)
+        off = max(0, min(max_off, scroll_offset))
+        end = n - off
+        start = max(0, end - max_rows)
+        chunk = all_lines[start:end]
+
+        body = Text()
+        for i, line in enumerate(chunk):
+            if i:
+                body.append("\n")
+            if len(line) > max_cols:
+                body.append(line[: max_cols - 1] + "…")
+            else:
+                body.append(line)
+        for _ in range(max_rows - len(chunk)):
+            body.append("\n")
+        return body
+
+    def render(self, ui):
+        from rich.layout import Layout
         from rich.panel import Panel
-        from rich.columns import Columns
         from rich.text import Text
 
         assert self.m33 is not None and self.flpr is not None
 
-        def pane(reader: RttUpBuffer, lines: Deque[str], title: str, border: str) -> Panel:
-            body_lines = list(lines) if lines else [f"[dim]{reader.status}[/dim]"]
-            # Use plain text join; Rich markup only on status placeholder
-            if lines:
-                body = Text("\n".join(body_lines))
-            else:
-                body = Text.from_markup(f"[dim]{reader.status}[/dim]")
-            subtitle = f"CB 0x{reader.cb_addr:08X}  ch{reader.channel}  {reader.status}"
+        term_h = max(ui.size.height, 8)
+        term_w = max(ui.size.width, 40)
+        header_h = 2
+        chrome = 4
+        body_rows = max(1, term_h - header_h - chrome)
+        self._body_rows = body_rows
+        col_w = max(12, (term_w // 2) - 4)
+
+        # Clamp offsets if buffer shrank / viewport grew.
+        self.m33_scroll = min(self.m33_scroll, self._max_scroll(self.m33_lines))
+        self.flpr_scroll = min(self.flpr_scroll, self._max_scroll(self.flpr_lines))
+
+        def pane(
+            reader: RttUpBuffer,
+            lines: Deque[str],
+            title: str,
+            border: str,
+            scroll: int,
+            focused: bool,
+        ) -> Panel:
+            body = self._viewport_lines(lines, body_rows, col_w, reader.status, scroll)
+            follow = "FOLLOW" if scroll == 0 else f"+{scroll} back"
+            focus_mark = " ●" if focused else ""
+            subtitle = (
+                f"CB 0x{reader.cb_addr:08X}  ch{reader.channel}  "
+                f"{reader.status}  [{follow}]{focus_mark}"
+            )
+            style = f"bold {border}" if focused else border
             return Panel(
                 body,
                 title=f"[bold]{title}[/] {reader.label}",
                 subtitle=subtitle,
-                border_style=border,
+                border_style=style,
+                height=body_rows + chrome,
                 expand=True,
             )
 
@@ -274,18 +392,42 @@ class DualRttApp:
         header.append("dual_rtt", style="bold")
         header.append(f"  SN {self.sn}  SWD {self.speed_khz} kHz  device {DEFAULT_DEVICE}")
         if self.error:
-            header.append(f"\nerror: {self.error}", style="bold red")
-        header.append("\nCtrl+C to quit", style="dim")
-
-        cols = Columns(
-            [
-                pane(self.m33, self.m33_lines, "M33", "cyan"),
-                pane(self.flpr, self.flpr_lines, "RV32", "magenta"),
-            ],
-            equal=True,
-            expand=True,
+            header.append(f"  error: {self.error}", style="bold red")
+        header.append(
+            "  Tab focus  ↑↓/PgUp/PgDn scroll  End follow  Ctrl+C quit",
+            style="dim",
         )
-        return Group(header, cols)
+
+        layout = Layout()
+        layout.split_column(
+            Layout(header, name="header", size=header_h),
+            Layout(name="body"),
+        )
+        layout["body"].split_row(
+            Layout(
+                pane(
+                    self.m33,
+                    self.m33_lines,
+                    "M33",
+                    "cyan",
+                    self.m33_scroll,
+                    self.focus == "m33",
+                ),
+                name="m33",
+            ),
+            Layout(
+                pane(
+                    self.flpr,
+                    self.flpr_lines,
+                    "RV32",
+                    "magenta",
+                    self.flpr_scroll,
+                    self.focus == "flpr",
+                ),
+                name="flpr",
+            ),
+        )
+        return layout
 
     def run(self) -> int:
         from rich.live import Live
@@ -294,17 +436,86 @@ class DualRttApp:
         self.open()
         poller = threading.Thread(target=self.poll_loop, name="rtt-poll", daemon=True)
         poller.start()
+        interrupted = False
         try:
-            with Live(self.render(), console=ui, refresh_per_second=10, screen=False) as live:
+            with Live(
+                self.render(ui),
+                console=ui,
+                refresh_per_second=10,
+                screen=True,
+                vertical_overflow="crop",
+            ) as live:
                 while not self.stop.is_set():
-                    live.update(self.render())
-                    time.sleep(0.1)
+                    self.handle_keys()
+                    live.update(self.render(ui))
+                    time.sleep(0.05)
         except KeyboardInterrupt:
-            ui.print("\n[dim]Interrupted[/]")
+            interrupted = True
         finally:
             self.close()
             poller.join(timeout=2.0)
+            if interrupted:
+                ui.print("[dim]Interrupted[/]")
         return 0
+
+
+def _win_special_name(code: bytes) -> str | None:
+    # Second byte after 0xE0 / 0x00 prefix from msvcrt.getch().
+    mapping = {
+        b"H": "up",
+        b"P": "down",
+        b"I": "pgup",
+        b"Q": "pgdn",
+        b"G": "home",
+        b"O": "end",
+    }
+    return mapping.get(code)
+
+
+def _read_key():
+    """Non-blocking key read. Returns (kind, payload) or None.
+
+    kind: 'char' | 'special' | 'named'
+    """
+    if sys.platform == "win32":
+        import msvcrt
+
+        if not msvcrt.kbhit():
+            return None
+        ch = msvcrt.getch()
+        if ch in (b"\x00", b"\xe0"):
+            return ("special", msvcrt.getch())
+        return ("char", ch)
+
+    # POSIX: best-effort non-blocking stdin
+    import select
+
+    if not select.select([sys.stdin], [], [], 0)[0]:
+        return None
+    ch = sys.stdin.read(1)
+    if ch == "\x1b":
+        # Drain a short CSI sequence if present
+        rest = ""
+        if select.select([sys.stdin], [], [], 0.01)[0]:
+            rest += sys.stdin.read(1)
+        if rest == "[" and select.select([sys.stdin], [], [], 0.01)[0]:
+            rest += sys.stdin.read(1)
+        seq = rest
+        named = {
+            "[A": "up",
+            "[B": "down",
+            "[5": "pgup",
+            "[6": "pgdn",
+            "[H": "home",
+            "[F": "end",
+        }.get(seq)
+        if named:
+            # Consume trailing '~' for PgUp/PgDn if present
+            if named in ("pgup", "pgdn") and select.select([sys.stdin], [], [], 0.01)[0]:
+                sys.stdin.read(1)
+            return ("named", named)
+        return None
+    return ("char", ch.encode() if isinstance(ch, str) else ch)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -352,8 +563,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--lines",
         type=int,
-        default=200,
-        help="Scrollback lines per pane (default: 200)",
+        default=1000,
+        help="Scrollback buffer lines per pane (default: 1000; viewport auto-tails)",
     )
     return p
 
@@ -363,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
 
     try:
-        import pylink  # noqa: F401
+        from pylink.jlink import JLink  # noqa: F401
     except ImportError as e:
         raise SystemExit(
             "pylink-square is required for dual RTT.\n"
